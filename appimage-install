@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Install an AppImage into ~/Applications and add a launcher entry (with icon) for rofi drun.
+# Usage: appimage-install <file.AppImage> [short-name]
+set -euo pipefail
+src="$1"
+name="${2:-$(basename "$src" | sed -E 's/\.AppImage$//I; s/[-_][0-9].*//' | tr 'A-Z' 'a-z')}"
+app="$HOME/Applications/$name.AppImage"
+icons="$HOME/.local/share/icons"; apps="$HOME/.local/share/applications"
+mkdir -p ~/Applications "$icons" "$apps"
+cp "$src" "$app"; chmod +x "$app"
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+(cd "$tmp" && "$app" --appimage-extract >/dev/null)
+root="$tmp/squashfs-root"
+
+# Icon: .DirIcon, else the Icon= named in the bundled .desktop, else the largest png/svg
+orig=$(ls "$root"/*.desktop 2>/dev/null | head -1 || true)
+icon_src=""
+[[ -e "$root/.DirIcon" ]] && icon_src=$(readlink -f "$root/.DirIcon")
+if [[ -z "$icon_src" || ! -s "$icon_src" ]] && [[ -n "$orig" ]]; then
+  iname=$(grep -m1 '^Icon=' "$orig" | cut -d= -f2- || true)
+  icon_src=$(find "$root" \( -name "$iname.png" -o -name "$iname.svg" \) -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)
+fi
+[[ -z "$icon_src" ]] && icon_src=$(find "$root" \( -name '*.png' -o -name '*.svg' \) -printf '%s %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+ext="${icon_src##*.}"; [[ "$ext" == svg ]] || ext=png
+cp "$icon_src" "$icons/$name.$ext"
+
+pretty=$( [[ -n "$orig" ]] && grep -m1 '^Name=' "$orig" | cut -d= -f2- || true ); pretty="${pretty:-$name}"
+cats=$( [[ -n "$orig" ]] && grep -m1 '^Categories=' "$orig" | cut -d= -f2- || true ); cats="${cats:-Utility;}"
+wmclass=$( [[ -n "$orig" ]] && grep -m1 '^StartupWMClass=' "$orig" | cut -d= -f2- || true )
+
+cat > "$apps/$name.desktop" <<DESK
+[Desktop Entry]
+Type=Application
+Name=$pretty
+Exec=$app %U
+Icon=$icons/$name.$ext
+Terminal=false
+Categories=$cats
+${wmclass:+StartupWMClass=$wmclass}
+DESK
+update-desktop-database "$apps" 2>/dev/null || true
+echo "Installed $pretty -> $app (icon: $icons/$name.$ext)"
